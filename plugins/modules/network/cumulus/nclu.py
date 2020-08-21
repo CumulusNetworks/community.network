@@ -52,6 +52,8 @@ options:
             - Commit description that will be recorded to the commit log if
               I(commit) or I(atomic) are true.
         default: "Ansible-originated commit"
+notes:
+    - Supports check_mode. Note that when using check_mode, I(abort) is always true.
 '''
 
 EXAMPLES = '''
@@ -202,14 +204,19 @@ def run_nclu(module, command_list, command_string, commit, atomic, abort, descri
     output = "\n".join(output_lines)
 
     # If pending changes changed, report a change.
+    diff = {}
     after = check_pending(module)
     if before == after:
         _changed = False
     else:
         _changed = True
+        diff = {"prepared": after}
+
+    if module.check_mode:
+        command_helper(module, "abort")
 
     # Do the commit.
-    if do_commit:
+    if do_commit and not module.check_mode:
         result = command_helper(module, "commit description '%s'" % description)
         if "commit ignored" in result:
             _changed = False
@@ -217,7 +224,7 @@ def run_nclu(module, command_list, command_string, commit, atomic, abort, descri
         elif command_helper(module, "show commit last") == "":
             _changed = False
 
-    return _changed, output
+    return _changed, output, diff
 
 
 def main(testing=False):
@@ -228,6 +235,7 @@ def main(testing=False):
         abort=dict(required=False, type='bool', default=False),
         commit=dict(required=False, type='bool', default=False),
         atomic=dict(required=False, type='bool', default=False)),
+        supports_check_mode=True,
         mutually_exclusive=[('commands', 'template'),
                             ('commit', 'atomic'),
                             ('abort', 'atomic')]
@@ -239,9 +247,18 @@ def main(testing=False):
     abort = module.params.get('abort')
     description = module.params.get('description')
 
-    _changed, output = run_nclu(module, command_list, command_string, commit, atomic, abort, description)
+    if module.check_mode:
+        commit = False
+
+    _changed, output, diff = run_nclu(module, command_list, command_string, commit, atomic, abort, description)
+    result = {
+        "changed": _changed,
+        "msg": output,
+        "diff": diff
+    }
+
     if not testing:
-        module.exit_json(changed=_changed, msg=output)
+        module.exit_json(**result)
     elif testing:
         return {"changed": _changed, "msg": output}
 
